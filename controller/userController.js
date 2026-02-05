@@ -640,6 +640,7 @@ exports.updateProfile = async (req, res) => {
 /* ======================================================
    RESEND OTP
 ====================================================== */
+
 exports.resendOtp = async (req, res) => {
   try {
     const { email } = req.body;
@@ -651,31 +652,65 @@ exports.resendOtp = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email });
-
-    if (!user) {
-      return res.status(404).json({
+    // FIRST: Check if user exists and is verified in DATABASE
+    const existingVerifiedUser = await User.findOne({ 
+      email, 
+      isVerified: true 
+    });
+    
+    if (existingVerifiedUser) {
+      return res.status(400).json({
         success: false,
-        message: "User not found",
+        message: "User is already verified. Please login.",
       });
     }
 
-    if (user.isVerified) {
-      return res.status(400).json({
-        success: false,
-        message: "User is already verified",
-      });
+    // SECOND: Check for unverified user in DATABASE
+    let user = await User.findOne({ 
+      email, 
+      isVerified: false 
+    });
+
+    // THIRD: If not in database, check TEMPORARY STORAGE
+    let tempUserData = null;
+    if (!user) {
+      tempUserData = tempUsers.get(email);
+      if (!tempUserData) {
+        return res.status(404).json({
+          success: false,
+          message: "Registration session expired. Please register again.",
+        });
+      }
     }
 
     // Generate new OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otp = otp;
-    user.otpExpire = Date.now() + 10 * 60 * 1000;
-    await user.save({ validateBeforeSave: false });
+    const otpExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    if (user) {
+      // Case: User exists in DB but not verified
+      user.otp = otp;
+      user.otpExpire = otpExpire;
+      await user.save({ validateBeforeSave: false });
+    } else {
+      // Case: User is in temp storage (new registration)
+      // Update temp storage with new OTP
+      tempUserData.otp = otp;
+      tempUserData.otpExpire = otpExpire;
+      tempUsers.set(email, tempUserData);
+      
+      // Reset the auto-delete timer
+      clearTimeout(tempUserData.timeoutId);
+      const timeoutId = setTimeout(() => {
+        tempUsers.delete(email);
+      }, 15 * 60 * 1000);
+      tempUserData.timeoutId = timeoutId;
+    }
 
     try {
+      // Send email
       await sendEmail({
-        email: user.email,
+        email: email,
         subject: "LocalTourX Account Verification",
         message: `Your new OTP is ${otp}. It is valid for 10 minutes.`,
       });

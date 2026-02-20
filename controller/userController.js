@@ -1,7 +1,7 @@
 const User = require("../models/userModel");
-const crypto = require("crypto"); // Uncomment this line
+const crypto = require("crypto"); 
 const sendEmail = require("../utils/sendEmail");
-const bcrypt = require("bcrypt"); // Add this import
+const bcrypt = require("bcrypt"); 
 
 // Temporary storage for unverified users (in production, use Redis)
 const tempUsers = new Map();
@@ -9,11 +9,14 @@ const tempUsers = new Map();
 /* ======================================================
    REGISTER USER + SEND OTP
 ====================================================== */
+
 exports.registerUser = async (req, res) => {
   try {
     const { name, email, password, phone, role } = req.body;
 
-    // Validation
+    // Cloudinary URL comes automatically
+    const avatar = req.file?.path || "default-avatar-url";
+
     if (!name || !email || !password || !phone) {
       return res.status(400).json({
         success: false,
@@ -21,95 +24,49 @@ exports.registerUser = async (req, res) => {
       });
     }
 
-    // Check if user already exists and is verified
     const existingUser = await User.findOne({ email });
+
     if (existingUser && existingUser.isVerified) {
       return res.status(400).json({
         success: false,
-        message: "User already exists with this email",
+        message: "User already exists",
       });
     }
 
-    // If unverified user exists, update OTP
-    if (existingUser && !existingUser.isVerified) {
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      existingUser.otp = otp;
-      existingUser.otpExpire = Date.now() + 10 * 60 * 1000;
-      await existingUser.save({ validateBeforeSave: false });
-
-      try {
-        await sendEmail({
-          email: existingUser.email,
-          subject: "LocalTourX Account Verification",
-          message: `Your OTP is ${otp}. It is valid for 10 minutes.`,
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: "OTP sent to your email",
-          email: existingUser.email,
-        });
-      } catch (emailError) {
-        return res.status(500).json({
-          success: false,
-          message: "Failed to send OTP email",
-        });
-      }
-    }
-
-    // Generate OTP
+    // OTP generation
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Store temporary user data with PLAIN password
-    // Mongoose middleware will hash it when we create the user
     const tempUser = {
       name,
       email,
-      password: password, // Store plain password
+      password,
       phone,
+      avatar, //  Cloudinary URL saved here
       role: role || "tourist",
       otp,
       otpExpire: Date.now() + 10 * 60 * 1000,
-      createdAt: Date.now()
     };
 
-    // Store in temporary storage (in production use Redis)
     tempUsers.set(email, tempUser);
 
-    // Set expiration for temp data (15 minutes)
-    setTimeout(() => {
-      tempUsers.delete(email);
-    }, 15 * 60 * 1000);
+    await sendEmail({
+      email,
+      subject: "OTP Verification",
+      message: `Your OTP is ${otp}`,
+    });
 
-    try {
-      // Send OTP email
-      await sendEmail({
-        email: email,
-        subject: "LocalTourX Account Verification",
-        message: `Your OTP is ${otp}. It is valid for 10 minutes.`,
-      });
+    res.status(200).json({
+      success: true,
+      message: "OTP sent",
+    });
 
-      res.status(200).json({
-        success: true,
-        message: "OTP sent to your email",
-        email: email,
-      });
-    } catch (emailError) {
-      tempUsers.delete(email); // Clean up on email failure
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send OTP email",
-      });
-    }
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      message: "Server error", 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message,
     });
   }
 };
-
 /* ======================================================
    VERIFY OTP & CREATE USER
 ====================================================== */
@@ -199,6 +156,7 @@ exports.verifyOtp = async (req, res) => {
       password: tempUser.password, // Mongoose middleware will hash this
       phone: tempUser.phone,
       role: tempUser.role,
+      avatar: tempUser.avatar, //  Save Cloudinary URL to DB
       isVerified: true,
       otp: undefined,
       otpExpire: undefined,

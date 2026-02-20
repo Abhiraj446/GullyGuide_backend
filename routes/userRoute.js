@@ -13,11 +13,16 @@ const {
 } = require("../controller/userController");
 
 const { isAuthenticated } = require("../middlewares/auth");
+const { uploadAvatar } = require("../middlewares/upload");
+
 
 const router = express.Router();
 
 /* ================= AUTH ================= */
-router.post("/register", registerUser);
+// router.post("/register", registerUser);
+// router.post("/register", uploadAvatar.single('avatar'), registerUser);
+ router.post("/register", uploadAvatar.single("avatar"), registerUser);
+
 router.post("/verify-otp", verifyOtp);
 router.post("/resend-otp", resendOtp);
 router.post("/login", loginUser);
@@ -30,6 +35,6 @@ router.put("/password/update", isAuthenticated, updatePassword);
 
 /* ============ USER PROFILE ============== */
 router.get("/me", isAuthenticated, getUserDetails);
-router.put("/me/update", isAuthenticated, updateProfile);
+router.put("/me/update", isAuthenticated, uploadAvatar.single('avatar'), updateProfile);
 
 module.exports = router;

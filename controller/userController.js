@@ -14,13 +14,24 @@ exports.registerUser = async (req, res) => {
   try {
     const { name, email, password, phone, role } = req.body;
 
+    const normalizedRole = role || "tourist";
+
     // Cloudinary URL comes automatically
     const avatar = req.file?.path || "default-avatar-url";
 
-    if (!name || !email || !password || !phone) {
+    if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: "All fields are required",
+        message: "Name, email and password are required",
+      });
+    }
+
+    // Phone is mandatory only for guides/admins
+    const phoneRequired = normalizedRole === "guide" || normalizedRole === "admin";
+    if (phoneRequired && !phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required for guides",
       });
     }
 
@@ -40,9 +51,9 @@ exports.registerUser = async (req, res) => {
       name,
       email,
       password,
-      phone,
+      phone: phoneRequired ? phone : undefined,
       avatar, //  Cloudinary URL saved here
-      role: role || "tourist",
+      role: normalizedRole,
       otp,
       otpExpire: Date.now() + 10 * 60 * 1000,
     };
@@ -276,6 +287,9 @@ exports.loginUser = async (req, res) => {
 ====================================================== */
 exports.logoutUser = async (req, res) => {
   try {
+    // Increment tokenVersion to invalidate existing JWTs
+    await User.findByIdAndUpdate(req.user.id, { $inc: { tokenVersion: 1 } });
+
     // Clear token cookie if using cookies
     res.cookie("token", null, {
       expires: new Date(Date.now()),

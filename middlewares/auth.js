@@ -36,6 +36,14 @@ exports.isAuthenticated = async (req, res, next) => {
       });
     }
 
+    // Token invalidated if version mismatches
+    if (decoded.tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired, please login again"
+      });
+    }
+
     // Check if user is verified
     if (!user.isVerified) {
       return res.status(401).json({ 

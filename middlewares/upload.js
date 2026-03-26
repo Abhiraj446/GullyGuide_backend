@@ -20,7 +20,7 @@
   const avatarStorage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: {
-      folder: 'GullyGuide/avatars', // Fixed: removed duplicate
+      folder: 'GullyGuide/avatars',
       allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
       transformation: [{ width: 500, height: 500, crop: 'limit' }], // Smaller for avatars
     },

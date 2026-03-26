@@ -22,6 +22,14 @@ const postSchema = new Schema({
     postedBy : {
         type : ObjectId,
         ref : 'User'
+    },
+    location: {
+        city: String,
+        state: String,
+        coordinates: {
+            lat: Number,
+            lng: Number,
+        },
     }
 },{
     timestamps : true

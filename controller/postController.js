@@ -6,6 +6,11 @@ const cloudinary = require('../config/cloudinary');
 exports.createPost = async (req, res) => {
 
     try {
+        // Only guides/admins can create posts
+        if (!['guide', 'admin'].includes(req.user?.role)) {
+            return res.status(403).json({ error: "Only guides can create posts" });
+        }
+
         const { title, body } = req.body;
 
         // Check required fields
@@ -18,12 +23,20 @@ exports.createPost = async (req, res) => {
             return res.status(422).json({ error: "Photo is required" });
         }
 
+        // Use user's saved location (if any) when creating the post
+        const userLocation = req.user?.location || {};
+
         // Create new post with Cloudinary URL from multer
         const post = new Post({
             title,
             body,
             photo: req.file.path, // Cloudinary URL is in req.file.path
-            postedBy: req.user._id
+            postedBy: req.user._id,
+            location: {
+                city: userLocation.city,
+                state: userLocation.state,
+                coordinates: userLocation.coordinates
+            }
         });
 
         await post.save();
@@ -180,6 +193,10 @@ exports.commentOnPost = async (req, res) => {
 // DELETE POST (with Cloudinary image cleanup)
 exports.deletePost = async (req, res) => {
     try {
+        if (!['guide', 'admin'].includes(req.user?.role)) {
+            return res.status(403).json({ error: "Only guides can delete posts" });
+        }
+
         const post = await Post.findById(req.params.postId);
         
         if (!post) {
@@ -243,6 +260,7 @@ exports.updatePost = async (req, res) => {
         const updates = {};
         if (req.body.title) updates.title = req.body.title;
         if (req.body.body) updates.body = req.body.body;
+        if (req.body.location) updates.location = req.body.location;
         
         // If new image uploaded
         if (req.file) {

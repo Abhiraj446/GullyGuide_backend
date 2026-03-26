@@ -28,9 +28,14 @@ const userSchema = new mongoose.Schema({
 
   phone: {
     type: String,
-    required: [true, "Please enter your phone number"],
+    // Only required for guides/admins; tourists can skip
+    required: [function() {
+      return this.role === "guide" || this.role === "admin";
+    }, "Phone number is required for guides"],
     validate: {
       validator: function(v) {
+        // Allow empty/undefined when not required (tourists)
+        if (!v) return true;
         return /^[0-9]{10}$/.test(v);
       },
       message: "Phone number must be 10 digits"
@@ -41,6 +46,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ["tourist", "guide", "admin"],
     default: "tourist",
+  },
+
+  // Used to invalidate old JWTs (increment on logout)
+  tokenVersion: {
+    type: Number,
+    default: 0,
   },
 
   avatar: {
@@ -103,7 +114,7 @@ userSchema.pre("save", async function() {
 // JWT Token
 userSchema.methods.getJWTToken = function() {
   return jwt.sign(
-    { id: this._id, role: this.role },
+    { id: this._id, role: this.role, tokenVersion: this.tokenVersion },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRE || "7d" }
   );

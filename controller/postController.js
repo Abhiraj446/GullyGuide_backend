@@ -2,6 +2,15 @@
 const Post = require('../models/post');
 const cloudinary = require('../config/cloudinary');
 
+const parseJSON = (value) => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
 // CREATE POST WITH IMAGE UPLOAD
 exports.createPost = async (req, res) => {
 
@@ -11,7 +20,8 @@ exports.createPost = async (req, res) => {
             return res.status(403).json({ error: "Only guides can create posts" });
         }
 
-        const { title, body } = req.body;
+        const { title, body, location: rawLocation } = req.body;
+        const requestLocation = parseJSON(rawLocation);
 
         // Check required fields
         if (!title || !body) {
@@ -23,19 +33,24 @@ exports.createPost = async (req, res) => {
             return res.status(422).json({ error: "Photo is required" });
         }
 
-        // Use user's saved location (if any) when creating the post
         const userLocation = req.user?.location || {};
+        const locationSource = (requestLocation && requestLocation.city && requestLocation.state)
+            ? requestLocation
+            : (userLocation.city && userLocation.state ? userLocation : null);
 
-        // Create new post with Cloudinary URL from multer
+        if (!locationSource || !locationSource.city || !locationSource.state) {
+            return res.status(422).json({ error: "Location city and state are required" });
+        }
+
         const post = new Post({
             title,
             body,
             photo: req.file.path, // Cloudinary URL is in req.file.path
             postedBy: req.user._id,
             location: {
-                city: userLocation.city,
-                state: userLocation.state,
-                coordinates: userLocation.coordinates
+                city: locationSource.city,
+                state: locationSource.state,
+                coordinates: locationSource.coordinates || userLocation.coordinates
             }
         });
 
@@ -260,7 +275,11 @@ exports.updatePost = async (req, res) => {
         const updates = {};
         if (req.body.title) updates.title = req.body.title;
         if (req.body.body) updates.body = req.body.body;
-        if (req.body.location) updates.location = req.body.location;
+
+        const requestLocation = parseJSON(req.body.location);
+        if (requestLocation && typeof requestLocation === 'object') {
+            updates.location = requestLocation;
+        }
         
         // If new image uploaded
         if (req.file) {

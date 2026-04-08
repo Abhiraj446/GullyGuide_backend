@@ -16,8 +16,10 @@ const postSchema = new Schema({
     },
     likes : [{type : ObjectId, ref : "User"}],
     comments : [{
+        _id: { type: ObjectId, auto: true },
         text : String,
-        commentedBy : {type : ObjectId, ref : "User"}
+        commentedBy : {type : ObjectId, ref : "User"},
+        likes: [{type : ObjectId, ref : "User"}]
     }],
     postedBy : {
         type : ObjectId,

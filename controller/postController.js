@@ -71,31 +71,68 @@ exports.createPost = async (req, res) => {
 };
 
 // GET ALL POSTS (with pagination)
+// exports.getAllPosts = async (req, res) => {
+//     try {
+//         // const page = parseInt(req.query.page) || 1;
+//         // const limit = parseInt(req.query.limit) || 10;
+//         // const skip = (page - 1) * limit;
+
+//         const posts = await Post.find()
+//             // .populate('postedBy', 'name email avatar')
+//             // .populate('comments.commentedBy', 'name avatar')
+//             // .sort('-createdAt')
+//             // .skip(skip)
+//             // .limit(limit);
+
+//         // const totalPosts = await Post.countDocuments();
+
+//         res.json({ 
+//             posts,
+//             // currentPage: page,
+//             // totalPages: Math.ceil(totalPosts / limit),
+//             // totalPosts
+//         });
+//     } catch (error) {
+//         console.error(error);
+//         res.status(500).json({ error: "Server error" });
+//     }
+// };
+
 exports.getAllPosts = async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
+  try {
+    const posts = await Post.find()
+      .populate('postedBy', 'name email avatar')
+      .sort({ createdAt: -1 }); // 🔥 latest first
 
-        const posts = await Post.find()
-            .populate('postedBy', 'name email avatar')
-            .populate('comments.commentedBy', 'name avatar')
-            .sort('-createdAt')
-            .skip(skip)
-            .limit(limit);
+    // ✅ normalize data (IMPORTANT)
+    const formattedPosts = posts.map(post => ({
+      _id: post._id,
+      title: post.title,
+      body: post.body,
+      photo: post.photo,
+      likes: post.likes,
+      comments: post.comments,
+      createdAt: post.createdAt,
 
-        const totalPosts = await Post.countDocuments();
+      postedBy: post.postedBy,
 
-        res.json({ 
-            posts,
-            currentPage: page,
-            totalPages: Math.ceil(totalPosts / limit),
-            totalPosts
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Server error" });
-    }
+      location: {
+        city: post.location?.city?.trim().toUpperCase(),
+        state: post.location?.state?.trim().toUpperCase(),
+        coordinates: post.location?.coordinates
+      }
+    }));
+
+    res.json({
+      success: true,
+      count: formattedPosts.length,
+      posts: formattedPosts
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Server error" });
+  }
 };
 
 // GET MY POSTS
@@ -199,6 +236,156 @@ exports.commentOnPost = async (req, res) => {
         }
 
         res.json({ message: "Comment added", post });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+// DELETE COMMENT
+exports.deleteComment = async (req, res) => {
+    try {
+        const { postId, commentId } = req.params;
+
+        // Find the post
+        const post = await Post.findById(postId);
+        if (!post) {
+            return res.status(404).json({ error: "Post not found" });
+        }
+
+        // Find the comment
+        const comment = post.comments.id(commentId);
+        if (!comment) {
+            return res.status(404).json({ error: "Comment not found" });
+        }
+
+        // Check if user is the commenter or admin
+        if (comment.commentedBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ error: "You can only delete your own comments" });
+        }
+
+        // Remove the comment
+        post.comments.pull(commentId);
+        await post.save();
+
+        // Populate and return updated post
+        const updatedPost = await Post.findById(postId)
+            .populate('postedBy', 'name email avatar')
+            .populate('comments.commentedBy', 'name avatar');
+
+        res.json({ message: "Comment deleted", post: updatedPost });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+// UPDATE COMMENT
+exports.updateComment = async (req, res) => {
+    const { text } = req.body;
+
+    if (!text) {
+        return res.status(422).json({ error: "Comment text is required" });
+    }
+
+    try {
+        const { postId, commentId } = req.params;
+
+        // Find the post
+        const post = await Post.findById(postId);
+        if (!post) {
+            return res.status(404).json({ error: "Post not found" });
+        }
+
+        // Find the comment
+        const comment = post.comments.id(commentId);
+        if (!comment) {
+            return res.status(404).json({ error: "Comment not found" });
+        }
+
+        // Check if user is the commenter or admin
+        if (comment.commentedBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ error: "You can only update your own comments" });
+        }
+
+        // Update the comment text
+        comment.text = text;
+        await post.save();
+
+        // Populate and return updated post
+        const updatedPost = await Post.findById(postId)
+            .populate('postedBy', 'name email avatar')
+            .populate('comments.commentedBy', 'name avatar');
+
+        res.json({ message: "Comment updated", post: updatedPost });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+// LIKE COMMENT
+exports.likeComment = async (req, res) => {
+    try {
+        const { postId, commentId } = req.params;
+
+        // Find the post
+        const post = await Post.findById(postId);
+        if (!post) {
+            return res.status(404).json({ error: "Post not found" });
+        }
+
+        // Find the comment
+        const comment = post.comments.id(commentId);
+        if (!comment) {
+            return res.status(404).json({ error: "Comment not found" });
+        }
+
+        // Add like if not already liked
+        if (!comment.likes.includes(req.user._id)) {
+            comment.likes.push(req.user._id);
+            await post.save();
+        }
+
+        // Populate and return updated post
+        const updatedPost = await Post.findById(postId)
+            .populate('postedBy', 'name email avatar')
+            .populate('comments.commentedBy', 'name avatar');
+
+        res.json({ message: "Comment liked", post: updatedPost });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+// UNLIKE COMMENT
+exports.unlikeComment = async (req, res) => {
+    try {
+        const { postId, commentId } = req.params;
+
+        // Find the post
+        const post = await Post.findById(postId);
+        if (!post) {
+            return res.status(404).json({ error: "Post not found" });
+        }
+
+        // Find the comment
+        const comment = post.comments.id(commentId);
+        if (!comment) {
+            return res.status(404).json({ error: "Comment not found" });
+        }
+
+        // Remove like
+        comment.likes = comment.likes.filter(id => id.toString() !== req.user._id.toString());
+        await post.save();
+
+        // Populate and return updated post
+        const updatedPost = await Post.findById(postId)
+            .populate('postedBy', 'name email avatar')
+            .populate('comments.commentedBy', 'name avatar');
+
+        res.json({ message: "Comment unliked", post: updatedPost });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: "Server error" });

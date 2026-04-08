@@ -9,6 +9,7 @@ const {
   updatePassword,
   getUserDetails,
   updateProfile,
+  getAllGuides,
   resendOtp,
 } = require("../controller/userController");
 
@@ -19,8 +20,6 @@ const { uploadAvatar } = require("../middlewares/upload");
 const router = express.Router();
 
 /* ================= AUTH ================= */
-// router.post("/register", registerUser);
-// router.post("/register", uploadAvatar.single('avatar'), registerUser);
  router.post("/register", uploadAvatar.single("avatar"), registerUser);
 
 router.post("/verify-otp", verifyOtp);
@@ -32,6 +31,9 @@ router.get("/logout", isAuthenticated, logoutUser);
 router.post("/password/forgot", forgotPassword);
 router.put("/password/reset/:token", resetPassword);
 router.put("/password/update", isAuthenticated, updatePassword);
+
+/* ============ GUIDE SEARCH ================= */
+router.get("/guides", getAllGuides);
 
 /* ============ USER PROFILE ============== */
 router.get("/me", isAuthenticated, getUserDetails);

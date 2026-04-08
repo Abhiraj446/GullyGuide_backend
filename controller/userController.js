@@ -610,6 +610,42 @@ exports.updateProfile = async (req, res) => {
 };
 
 /* ======================================================
+   GET ALL GUIDES
+====================================================== */
+exports.getAllGuides = async (req, res) => {
+  try {
+    const { city, language, name } = req.query;
+    const filter = { role: "guide", isVerified: true };
+
+    if (city) {
+      filter["location.city"] = new RegExp(`^${city}$`, "i");
+    }
+
+    if (language) {
+      filter.languages = { $in: [language] };
+    }
+
+    if (name) {
+      filter.name = new RegExp(name, "i");
+    }
+
+    const guides = await User.find(filter).select("-password -otp -otpExpire -resetPasswordToken -resetPasswordExpire -tokenVersion");
+
+    res.status(200).json({
+      success: true,
+      count: guides.length,
+      guides,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+/* ======================================================
    RESEND OTP
 ====================================================== */
 

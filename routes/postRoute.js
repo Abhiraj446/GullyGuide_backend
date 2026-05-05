@@ -19,10 +19,10 @@ const {upload} = require('../middlewares/upload')
 
 const router = express.Router();
 
-// All routes require authentication
+// All routes require authentication except /all which is public
 // Guides/admins can create & manage posts; tourists can only read
 router.post('/create', isAuthenticated, authorizeRoles('guide', 'admin'), upload.single('photo'), createPost);
-router.get('/all', isAuthenticated, getAllPosts);
+router.get('/all', getAllPosts);
 router.get('/me', isAuthenticated, authorizeRoles('guide', 'admin'), getMyPosts);
 router.get('/:postId', isAuthenticated, getPost);
 router.put('/like/:postId', isAuthenticated, authorizeRoles('guide', 'admin'), likePost);

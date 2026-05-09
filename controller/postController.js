@@ -20,12 +20,17 @@ exports.createPost = async (req, res) => {
             return res.status(403).json({ error: "Only guides can create posts" });
         }
 
-        const { title, body, location: rawLocation } = req.body;
+        const { title, body, price, location: rawLocation } = req.body;
         const requestLocation = parseJSON(rawLocation);
+        const normalizedPrice = Number(price);
 
         // Check required fields
         if (!title || !body) {
             return res.status(422).json({ error: "Title and body are required" });
+        }
+
+        if (price === undefined || price === null || price === '' || Number.isNaN(normalizedPrice) || normalizedPrice < 0) {
+            return res.status(422).json({ error: "Valid price is required" });
         }
 
         // Check if file was uploaded
@@ -45,6 +50,7 @@ exports.createPost = async (req, res) => {
         const post = new Post({
             title,
             body,
+            price: normalizedPrice,
             photo: req.file.path, // Cloudinary URL is in req.file.path
             postedBy: req.user._id,
             location: {
@@ -98,24 +104,80 @@ exports.createPost = async (req, res) => {
 //     }
 // };
 
+// exports.getAllPosts = async (req, res) => {
+//   try {
+//     const posts = await Post.find()
+//       .populate('postedBy', 'name email avatar')
+//       .sort({ createdAt: -1 }); // 🔥 latest first
+
+//     // ✅ normalize data (IMPORTANT)
+//     const formattedPosts = posts.map(post => ({
+//       _id: post._id,
+//       title: post.title,
+//       body: post.body,
+//       price: post.price, 
+//       photo: post.photo,
+//       likes: post.likes,
+//       comments: post.comments,
+//       createdAt: post.createdAt,
+
+//       postedBy: post.postedBy,
+
+//       location: {
+//         city: post.location?.city?.trim().toUpperCase(),
+//         state: post.location?.state?.trim().toUpperCase(),
+//         coordinates: post.location?.coordinates
+//       }
+//     }));
+
+//     res.json({
+//       success: true,
+//       count: formattedPosts.length,
+//       posts: formattedPosts
+//     });
+
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ error: "Server error" });
+//   }
+// };
+
+// GET MY POSTS
+
+
+///////////////////////////////////////
 exports.getAllPosts = async (req, res) => {
   try {
-    const posts = await Post.find()
-      .populate('postedBy', 'name email avatar')
-      .sort({ createdAt: -1 }); // 🔥 latest first
+    // ✅ GET SEARCH PARAMETERS from URL
+    const { city, state } = req.query;
 
-    // ✅ normalize data (IMPORTANT)
+    // ✅ BUILD FILTER OBJECT
+    let filter = {};
+    
+    if (city) {
+      filter['location.city'] = { $regex: new RegExp(`^${city}$`, 'i') };
+    }
+    
+    if (state) {
+      filter['location.state'] = { $regex: new RegExp(`^${state}$`, 'i') };
+    }
+
+    // ✅ APPLY FILTER to database query
+    const posts = await Post.find(filter)
+      .populate('postedBy', 'name email avatar')
+      .sort({ createdAt: -1 });
+
+    // Format posts (your existing code)
     const formattedPosts = posts.map(post => ({
       _id: post._id,
       title: post.title,
       body: post.body,
+      price: post.price,
       photo: post.photo,
       likes: post.likes,
       comments: post.comments,
       createdAt: post.createdAt,
-
       postedBy: post.postedBy,
-
       location: {
         city: post.location?.city?.trim().toUpperCase(),
         state: post.location?.state?.trim().toUpperCase(),
@@ -126,6 +188,7 @@ exports.getAllPosts = async (req, res) => {
     res.json({
       success: true,
       count: formattedPosts.length,
+      filters: { city: city || null, state: state || null }, // ✅ SHOW applied filters
       posts: formattedPosts
     });
 
@@ -135,7 +198,6 @@ exports.getAllPosts = async (req, res) => {
   }
 };
 
-// GET MY POSTS
 exports.getMyPosts = async (req, res) => {
     try {
         const posts = await Post.find({ postedBy: req.user._id })
@@ -462,6 +524,13 @@ exports.updatePost = async (req, res) => {
         const updates = {};
         if (req.body.title) updates.title = req.body.title;
         if (req.body.body) updates.body = req.body.body;
+        if (req.body.price !== undefined) {
+            const normalizedPrice = Number(req.body.price);
+            if (req.body.price === '' || Number.isNaN(normalizedPrice) || normalizedPrice < 0) {
+                return res.status(422).json({ error: "Valid price is required" });
+            }
+            updates.price = normalizedPrice;
+        }
 
         const requestLocation = parseJSON(req.body.location);
         if (requestLocation && typeof requestLocation === 'object') {

@@ -21,6 +21,12 @@ const postSchema = new Schema({
         commentedBy : {type : ObjectId, ref : "User"},
         likes: [{type : ObjectId, ref : "User"}]
     }],
+     price : {
+        type : Number,
+        required : true,
+        min : 0
+    },
+
     postedBy : {
         type : ObjectId,
         ref : 'User'

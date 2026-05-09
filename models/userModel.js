@@ -58,6 +58,17 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: "default_avatar.jpg"
   },
+  
+  averageRating: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 5
+  },
+  totalReviews: {
+      type: Number,
+      default: 0
+ },
 
   languages: [{
     type: String

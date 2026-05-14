@@ -12,25 +12,62 @@ exports.createBooking = async (req, res) => {
 
         const { postId, tourDate, numberOfPeople, specialRequests } = req.body;
 
+        if (!postId || !tourDate || numberOfPeople === undefined || numberOfPeople === null) {
+            return res.status(400).json({
+                error: "Post, tour date, and number of people are required"
+            });
+        }
+
+        const normalizedPeople = Number(numberOfPeople);
+        if (!Number.isFinite(normalizedPeople) || normalizedPeople < 1 || normalizedPeople > 20) {
+            return res.status(400).json({
+                error: "Number of people must be between 1 and 20"
+            });
+        }
+
+        const normalizedTourDate = new Date(tourDate);
+        if (Number.isNaN(normalizedTourDate.getTime())) {
+            return res.status(400).json({
+                error: "Invalid tour date"
+            });
+        }
+
         // Find the post
         const post = await Post.findById(postId);
         if (!post) {
             return res.status(404).json({ error: "Post not found" });
         }
 
+        const normalizedPrice = Number(post.price);
+        if (!Number.isFinite(normalizedPrice) || normalizedPrice < 0) {
+            return res.status(400).json({
+                error: "This guide post has an invalid price. Please ask the guide to update it before booking."
+            });
+        }
+
         // Get guide from post
         const guideId = post.postedBy;
+        if (!guideId) {
+            return res.status(400).json({
+                error: "This guide post is missing owner information"
+            });
+        }
 
-        // Calculate total price (assuming post has price per person)
-        const totalPrice = post.price * numberOfPeople;
+        // Calculate total price (price per person * people count)
+        const totalPrice = normalizedPrice * normalizedPeople;
+        if (!Number.isFinite(totalPrice)) {
+            return res.status(400).json({
+                error: "Unable to calculate booking price for this trip"
+            });
+        }
 
         // Create booking
         const booking = new Booking({
             tourist: req.user._id,
             guide: guideId,
             post: postId,
-            tourDate,
-            numberOfPeople,
+            tourDate: normalizedTourDate,
+            numberOfPeople: normalizedPeople,
             totalPrice,
             specialRequests,
             status: 'pending'

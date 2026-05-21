@@ -1,6 +1,7 @@
 // controllers/postController.js
 const Post = require('../models/post');
 const cloudinary = require('../config/cloudinary');
+const { sendNotification, NotificationTemplates } = require('../utils/notificationHelper');
 
 const parseJSON = (value) => {
   if (typeof value !== 'string') return value;
@@ -58,6 +59,8 @@ exports.createPost = async (req, res) => {
                 state: locationSource.state,
                 coordinates: locationSource.coordinates || userLocation.coordinates
             }
+            
+
         });
 
         await post.save();
@@ -76,53 +79,45 @@ exports.createPost = async (req, res) => {
     }
 };
 
-// GET ALL POSTS (with pagination)
-// exports.getAllPosts = async (req, res) => {
-//     try {
-//         // const page = parseInt(req.query.page) || 1;
-//         // const limit = parseInt(req.query.limit) || 10;
-//         // const skip = (page - 1) * limit;
 
-//         const posts = await Post.find()
-//             // .populate('postedBy', 'name email avatar')
-//             // .populate('comments.commentedBy', 'name avatar')
-//             // .sort('-createdAt')
-//             // .skip(skip)
-//             // .limit(limit);
-
-//         // const totalPosts = await Post.countDocuments();
-
-//         res.json({ 
-//             posts,
-//             // currentPage: page,
-//             // totalPages: Math.ceil(totalPosts / limit),
-//             // totalPosts
-//         });
-//     } catch (error) {
-//         console.error(error);
-//         res.status(500).json({ error: "Server error" });
-//     }
-// };
-
+// GET MY POSTS
+///////////////////////////////////////
 // exports.getAllPosts = async (req, res) => {
 //   try {
-//     const posts = await Post.find()
-//       .populate('postedBy', 'name email avatar')
-//       .sort({ createdAt: -1 }); // 🔥 latest first
+//     // ✅ GET SEARCH PARAMETERS from URL
+//     const { city, state } = req.query;
 
-//     // ✅ normalize data (IMPORTANT)
+//     const page = parseInt(req.query.page) || 1;
+//         const limit = parseInt(req.query.limit) || 10;
+//         const skip = (page - 1) * limit;
+
+//     // ✅ BUILD FILTER OBJECT
+//     let filter = {};
+    
+//     if (city) {
+//       filter['location.city'] = { $regex: new RegExp(`^${city}$`, 'i') };
+//     }
+    
+//     if (state) {
+//       filter['location.state'] = { $regex: new RegExp(`^${state}$`, 'i') };
+//     }
+
+//     // ✅ APPLY FILTER to database query
+//     const posts = await Post.find(filter)
+//       .populate('postedBy', 'name email avatar')
+//       .sort({ createdAt: -1 });
+
+//     // Format posts (your existing code)
 //     const formattedPosts = posts.map(post => ({
 //       _id: post._id,
 //       title: post.title,
 //       body: post.body,
-//       price: post.price, 
+//       price: post.price,
 //       photo: post.photo,
 //       likes: post.likes,
 //       comments: post.comments,
 //       createdAt: post.createdAt,
-
 //       postedBy: post.postedBy,
-
 //       location: {
 //         city: post.location?.city?.trim().toUpperCase(),
 //         state: post.location?.state?.trim().toUpperCase(),
@@ -133,6 +128,7 @@ exports.createPost = async (req, res) => {
 //     res.json({
 //       success: true,
 //       count: formattedPosts.length,
+//       filters: { city: city || null, state: state || null }, // ✅ SHOW applied filters
 //       posts: formattedPosts
 //     });
 
@@ -141,34 +137,42 @@ exports.createPost = async (req, res) => {
 //     res.status(500).json({ error: "Server error" });
 //   }
 // };
-
-// GET MY POSTS
-
-
-///////////////////////////////////////
 exports.getAllPosts = async (req, res) => {
   try {
-    // ✅ GET SEARCH PARAMETERS from URL
+    // Get query params
     const { city, state } = req.query;
 
-    // ✅ BUILD FILTER OBJECT
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Build filter
     let filter = {};
-    
+
     if (city) {
-      filter['location.city'] = { $regex: new RegExp(`^${city}$`, 'i') };
+      filter["location.city"] = {
+        $regex: new RegExp(`^${city}$`, "i"),
+      };
     }
-    
+
     if (state) {
-      filter['location.state'] = { $regex: new RegExp(`^${state}$`, 'i') };
+      filter["location.state"] = {
+        $regex: new RegExp(`^${state}$`, "i"),
+      };
     }
 
-    // ✅ APPLY FILTER to database query
-    const posts = await Post.find(filter)
-      .populate('postedBy', 'name email avatar')
-      .sort({ createdAt: -1 });
+    // Get total posts count
+    const totalPosts = await Post.countDocuments(filter);
 
-    // Format posts (your existing code)
-    const formattedPosts = posts.map(post => ({
+    // Apply filter + pagination
+    const posts = await Post.find(filter)
+      .populate("postedBy", "name email avatar")
+      .sort({ createdAt: -1 })
+      .skip(skip)      // pagination start
+      .limit(limit);   // max records per page
+
+    // Format posts
+    const formattedPosts = posts.map((post) => ({
       _id: post._id,
       title: post.title,
       body: post.body,
@@ -181,20 +185,28 @@ exports.getAllPosts = async (req, res) => {
       location: {
         city: post.location?.city?.trim().toUpperCase(),
         state: post.location?.state?.trim().toUpperCase(),
-        coordinates: post.location?.coordinates
-      }
+        coordinates: post.location?.coordinates,
+      },
     }));
 
-    res.json({
+    res.status(200).json({
       success: true,
+      currentPage: page,
+      totalPages: Math.ceil(totalPosts / limit),
+      totalPosts,
       count: formattedPosts.length,
-      filters: { city: city || null, state: state || null }, // ✅ SHOW applied filters
-      posts: formattedPosts
+      filters: {
+        city: city || null,
+        state: state || null,
+      },
+      posts: formattedPosts,
     });
-
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({
+      success: false,
+      error: "Server error",
+    });
   }
 };
 
@@ -233,15 +245,38 @@ exports.getPost = async (req, res) => {
 // LIKE POST
 exports.likePost = async (req, res) => {
     try {
+        const existingPost = await Post.findById(req.params.postId);
+        if (!existingPost) {
+            return res.status(404).json({ error: "Post not found" });
+        }
+
+        const alreadyLiked = existingPost.likes.some(
+            (likeId) => likeId.toString() === req.user._id.toString()
+        );
+
         const post = await Post.findByIdAndUpdate(
             req.params.postId,
             { $addToSet: { likes: req.user._id } },
-            { new: true }
+            { returnDocument: 'after' }
         ).populate('postedBy', 'name email avatar')
          .populate('comments.commentedBy', 'name avatar');
 
-        if (!post) {
-            return res.status(404).json({ error: "Post not found" });
+        if (!alreadyLiked) {
+            const postOwnerId = post.postedBy?._id || post.postedBy;
+
+            if (postOwnerId && postOwnerId.toString() !== req.user._id.toString()) {
+                const likeNotification = NotificationTemplates.postLiked(req.user.name);
+
+                await sendNotification(
+                    postOwnerId,
+                    req.user._id,
+                    'like',
+                    likeNotification.title,
+                    likeNotification.message,
+                    post._id,
+                    'Post'
+                );
+            }
         }
 
         res.json({ message: "Post liked", post });
@@ -257,7 +292,7 @@ exports.unlikePost = async (req, res) => {
         const post = await Post.findByIdAndUpdate(
             req.params.postId,
             { $pull: { likes: req.user._id } },
-            { new: true }
+            { returnDocument: 'after' }
         ).populate('postedBy', 'name email avatar')
          .populate('comments.commentedBy', 'name avatar');
 
@@ -289,12 +324,27 @@ exports.commentOnPost = async (req, res) => {
         const post = await Post.findByIdAndUpdate(
             req.params.postId,
             { $push: { comments: comment } },
-            { new: true }
+            { returnDocument: 'after' }
         ).populate('postedBy', 'name email avatar')
          .populate('comments.commentedBy', 'name avatar');
 
         if (!post) {
             return res.status(404).json({ error: "Post not found" });
+        }
+
+        const postOwnerId = post.postedBy?._id || post.postedBy;
+        if (postOwnerId && postOwnerId.toString() !== req.user._id.toString()) {
+            const commentNotification = NotificationTemplates.postCommented(req.user.name);
+
+            await sendNotification(
+                postOwnerId,
+                req.user._id,
+                'comment',
+                commentNotification.title,
+                commentNotification.message,
+                post._id,
+                'Post'
+            );
         }
 
         res.json({ message: "Comment added", post });
@@ -563,7 +613,7 @@ exports.updatePost = async (req, res) => {
         const updatedPost = await Post.findByIdAndUpdate(
             req.params.postId,
             updates,
-            { new: true }
+            { returnDocument: 'after' }
         ).populate('postedBy', 'name email avatar')
          .populate('comments.commentedBy', 'name avatar');
 

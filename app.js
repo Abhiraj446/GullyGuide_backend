@@ -1,21 +1,8 @@
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
-const http = require('http');
-const socketIo = require('socket.io');
-
-    
 
 const app = express();
-
-const server = http.createServer(app);
-const io = socketIo(server, {
-    cors: {
-        origin: "http://localhost:3000", // Your frontend URL
-        methods: ["GET", "POST"],
-        credentials: true
-    }
-});
 
 app.use(cors());
 
@@ -26,20 +13,23 @@ const user = require("./routes/userRoute");
 const post = require("./routes/postRoute");
 const bookingRoutes = require('./routes/bookingRoute');
 const reviewRoutes = require('./routes/reviewRoutes');
+const notificationRoutes = require('./routes/notificationRoute');
 
 ///Chat
 const chatRoutes = require('./routes/chatRoutes');
-const setupSocket = require('./socket/socket');
+// itineraryRoute
+const itineraryRoutes = require('./routes/itineraryRoutes')
 
 // Routes
 app.use('/api/chat', chatRoutes);
-// Setup Socket
-setupSocket(io);
 
 app.use("/api/users", user);
 app.use("/api/posts", post);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/notifications', notificationRoutes);
+
+app.use('/api/itinerary', itineraryRoutes);
 
 
 

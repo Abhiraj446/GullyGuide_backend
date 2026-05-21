@@ -1,6 +1,9 @@
 const Chat = require('../models/chat-Model');
 const Message = require('../models/message-Model');
 const User = require('../models/userModel');
+const Notification = require('../models/notification');
+const { sendNotification, NotificationTemplates } = require('../utils/notificationHelper');
+const { getIo } = require('../socket/socket');
 
 // GET OR CREATE CHAT BETWEEN TWO USERS
 exports.getOrCreateChat = async (req, res) => {
@@ -92,6 +95,19 @@ exports.getMessages = async (req, res) => {
             }
         );
 
+        await Notification.updateMany(
+            {
+                recipient: req.user._id,
+                type: 'new_message',
+                relatedId: chatId,
+                isRead: false
+            },
+            {
+                isRead: true,
+                readAt: new Date()
+            }
+        );
+
         res.json({
             success: true,
             messages: messages.reverse(),
@@ -137,6 +153,22 @@ exports.sendMessage = async (req, res) => {
         const populatedMessage = await Message.findById(newMessage._id)
             .populate('sender', 'name email avatar')
             .populate('receiver', 'name email avatar');
+
+        const io = getIo();
+        if (io) {
+            io.to(String(receiverId)).emit('receive-message', populatedMessage);
+            io.to(String(req.user._id)).emit('receive-message', populatedMessage);
+        }
+
+        await sendNotification(
+            receiverId,
+            req.user._id,
+            'new_message',
+            NotificationTemplates.newMessage(req.user.name).title,
+            NotificationTemplates.newMessage(req.user.name).message,
+            chat._id,
+            'Message'
+        );
 
         res.status(201).json({
             success: true,

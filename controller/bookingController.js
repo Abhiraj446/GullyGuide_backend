@@ -1,6 +1,7 @@
 const Booking = require('../models/booking-Model');
 const Post = require('../models/post');
 const User = require('../models/userModel');
+const { sendNotification, NotificationTemplates } = require('../utils/notificationHelper');
 
 // CREATE BOOKING (Tourist only)
 exports.createBooking = async (req, res) => {
@@ -74,6 +75,21 @@ exports.createBooking = async (req, res) => {
         });
 
         await booking.save();
+
+        const tourist = await User.findById(req.user._id).select('name');
+        const bookingRequestNotification = NotificationTemplates.bookingRequest(
+            tourist?.name || req.user.name
+        );
+
+        await sendNotification(
+            guideId,
+            req.user._id,
+            'booking_request',
+            bookingRequestNotification.title,
+            bookingRequestNotification.message,
+            booking._id,
+            'Booking'
+        );
 
         // Populate booking details
         const populatedBooking = await Booking.findById(booking._id)
@@ -171,6 +187,23 @@ exports.updateBookingStatus = async (req, res) => {
             .populate('tourist', 'name email avatar')
             .populate('guide', 'name email avatar')
             .populate('post', 'title price');
+
+        if (status === 'confirmed') {
+            const bookingConfirmedNotification = NotificationTemplates.bookingConfirmed(
+                req.user.name,
+                updatedBooking?.post?.title || 'your tour'
+            );
+
+            await sendNotification(
+                booking.tourist,
+                req.user._id,
+                'booking_confirmed',
+                bookingConfirmedNotification.title,
+                bookingConfirmedNotification.message,
+                booking._id,
+                'Booking'
+            );
+        }
 
         res.json({
             success: true,

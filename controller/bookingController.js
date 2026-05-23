@@ -1,7 +1,93 @@
 const Booking = require('../models/booking-Model');
 const Post = require('../models/post');
 const User = require('../models/userModel');
+const GuideAvailability = require('../models/guideAvailability-Model');
 const { sendNotification, NotificationTemplates } = require('../utils/notificationHelper');
+
+const BOOKING_BLOCKING_STATUSES = ['pending', 'confirmed'];
+
+const startOfDay = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+};
+
+const endOfDay = (value) => {
+    const start = startOfDay(value);
+    if (!start) return null;
+    return new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+};
+
+const getInclusiveDays = (startDate, endDate) => {
+    const msPerDay = 24 * 60 * 60 * 1000;
+    return Math.floor((startOfDay(endDate) - startOfDay(startDate)) / msPerDay) + 1;
+};
+
+const parseBookingRange = ({ startDate, endDate, tourDate }) => {
+    const requestedStart = startOfDay(startDate || tourDate);
+    const requestedEnd = endOfDay(endDate || startDate || tourDate);
+
+    if (!requestedStart || !requestedEnd) {
+        return { error: "Invalid tour date range" };
+    }
+
+    if (requestedEnd < requestedStart) {
+        return { error: "End date cannot be before start date" };
+    }
+
+    const today = startOfDay(new Date());
+    if (requestedStart < today) {
+        return { error: "Booking date must be today or later" };
+    }
+
+    return {
+        startDate: requestedStart,
+        endDate: requestedEnd,
+        durationDays: getInclusiveDays(requestedStart, requestedEnd)
+    };
+};
+
+const findGuideDateConflict = async (guideId, startDate, endDate, ignoreBookingId = null) => {
+    const bookingQuery = {
+        guide: guideId,
+        status: { $in: BOOKING_BLOCKING_STATUSES },
+        $or: [
+            { startDate: { $lte: endDate }, endDate: { $gte: startDate } },
+            { startDate: { $exists: false }, tourDate: { $gte: startDate, $lte: endDate } }
+        ]
+    };
+
+    if (ignoreBookingId) {
+        bookingQuery._id = { $ne: ignoreBookingId };
+    }
+
+    const [bookingConflict, blockedRange] = await Promise.all([
+        Booking.findOne(bookingQuery).select('_id status startDate endDate'),
+        GuideAvailability.findOne({
+            guide: guideId,
+            startDate: { $lte: endDate },
+            endDate: { $gte: startDate }
+        }).select('_id reason startDate endDate')
+    ]);
+
+    if (bookingConflict) {
+        return {
+            type: 'booking',
+            message: "Guide already has a booking request for the selected dates"
+        };
+    }
+
+    if (blockedRange) {
+        return {
+            type: 'blocked',
+            message: blockedRange.reason
+                ? `Guide is unavailable for the selected dates: ${blockedRange.reason}`
+                : "Guide is unavailable for the selected dates"
+        };
+    }
+
+    return null;
+};
 
 // CREATE BOOKING (Tourist only)
 exports.createBooking = async (req, res) => {
@@ -11,11 +97,11 @@ exports.createBooking = async (req, res) => {
             return res.status(403).json({ error: "Only tourists can create bookings" });
         }
 
-        const { postId, tourDate, numberOfPeople, specialRequests } = req.body;
+        const { postId, tourDate, startDate, endDate, numberOfPeople, specialRequests } = req.body;
 
-        if (!postId || !tourDate || numberOfPeople === undefined || numberOfPeople === null) {
+        if (!postId || !(tourDate || startDate) || numberOfPeople === undefined || numberOfPeople === null) {
             return res.status(400).json({
-                error: "Post, tour date, and number of people are required"
+                error: "Post, tour date range, and number of people are required"
             });
         }
 
@@ -26,11 +112,9 @@ exports.createBooking = async (req, res) => {
             });
         }
 
-        const normalizedTourDate = new Date(tourDate);
-        if (Number.isNaN(normalizedTourDate.getTime())) {
-            return res.status(400).json({
-                error: "Invalid tour date"
-            });
+        const parsedRange = parseBookingRange({ startDate, endDate, tourDate });
+        if (parsedRange.error) {
+            return res.status(400).json({ error: parsedRange.error });
         }
 
         // Find the post
@@ -54,8 +138,13 @@ exports.createBooking = async (req, res) => {
             });
         }
 
-        // Calculate total price (price per person * people count)
-        const totalPrice = normalizedPrice * normalizedPeople;
+        const conflict = await findGuideDateConflict(guideId, parsedRange.startDate, parsedRange.endDate);
+        if (conflict) {
+            return res.status(409).json({ error: conflict.message });
+        }
+
+        // Calculate total price (price per person * people count * booked days)
+        const totalPrice = normalizedPrice * normalizedPeople * parsedRange.durationDays;
         if (!Number.isFinite(totalPrice)) {
             return res.status(400).json({
                 error: "Unable to calculate booking price for this trip"
@@ -67,7 +156,10 @@ exports.createBooking = async (req, res) => {
             tourist: req.user._id,
             guide: guideId,
             post: postId,
-            tourDate: normalizedTourDate,
+            tourDate: parsedRange.startDate,
+            startDate: parsedRange.startDate,
+            endDate: parsedRange.endDate,
+            durationDays: parsedRange.durationDays,
             numberOfPeople: normalizedPeople,
             totalPrice,
             specialRequests,
@@ -154,6 +246,38 @@ exports.getGuideBookings = async (req, res) => {
     }
 };
 
+// GET ADMIN BOOKING STATS
+exports.getAdminBookingStats = async (req, res) => {
+    try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ error: "Only admins can view booking stats" });
+        }
+
+        const [total, pending, processing, completed, cancelled] = await Promise.all([
+            Booking.countDocuments({}),
+            Booking.countDocuments({ status: 'pending' }),
+            Booking.countDocuments({ status: 'confirmed' }),
+            Booking.countDocuments({ status: 'completed' }),
+            Booking.countDocuments({ status: 'cancelled' }),
+        ]);
+
+        res.json({
+            success: true,
+            stats: {
+                total,
+                pending,
+                processing,
+                completed,
+                cancelled,
+                tripsDone: completed,
+            },
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
 // UPDATE BOOKING STATUS (Guide only)
 exports.updateBookingStatus = async (req, res) => {
     try {
@@ -178,6 +302,19 @@ exports.updateBookingStatus = async (req, res) => {
         // Can't change if already cancelled or completed
         if (booking.status === 'cancelled' || booking.status === 'completed') {
             return res.status(400).json({ error: `Cannot update a ${booking.status} booking` });
+        }
+
+        if (status === 'confirmed') {
+            const conflict = await findGuideDateConflict(
+                booking.guide,
+                booking.startDate || booking.tourDate,
+                booking.endDate || booking.tourDate,
+                booking._id
+            );
+
+            if (conflict) {
+                return res.status(409).json({ error: conflict.message });
+            }
         }
 
         booking.status = status;
@@ -281,6 +418,147 @@ exports.getBookingDetails = async (req, res) => {
             booking
         });
 
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+// GET GUIDE AVAILABILITY CALENDAR
+exports.getGuideAvailability = async (req, res) => {
+    try {
+        const { guideId } = req.params;
+        const { from, to } = req.query;
+
+        if (!guideId) {
+            return res.status(400).json({ error: "Guide is required" });
+        }
+
+        const rangeStart = startOfDay(from || new Date());
+        const defaultEnd = new Date(rangeStart);
+        defaultEnd.setUTCMonth(defaultEnd.getUTCMonth() + 3);
+        const rangeEnd = endOfDay(to || defaultEnd);
+
+        if (!rangeStart || !rangeEnd || rangeEnd < rangeStart) {
+            return res.status(400).json({ error: "Invalid calendar range" });
+        }
+
+        const [blockedRanges, bookings] = await Promise.all([
+            GuideAvailability.find({
+                guide: guideId,
+                startDate: { $lte: rangeEnd },
+                endDate: { $gte: rangeStart }
+            }).sort('startDate'),
+            Booking.find({
+                guide: guideId,
+                status: { $in: BOOKING_BLOCKING_STATUSES },
+                $or: [
+                    { startDate: { $lte: rangeEnd }, endDate: { $gte: rangeStart } },
+                    { startDate: { $exists: false }, tourDate: { $gte: rangeStart, $lte: rangeEnd } }
+                ]
+            }).select('tourDate startDate endDate durationDays status post').populate('post', 'title').sort('startDate')
+        ]);
+
+        res.json({
+            success: true,
+            availability: {
+                from: rangeStart,
+                to: rangeEnd,
+                blockedRanges,
+                bookings
+            }
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+// BLOCK GUIDE DATES
+exports.blockGuideAvailability = async (req, res) => {
+    try {
+        if (!['guide', 'admin'].includes(req.user.role)) {
+            return res.status(403).json({ error: "Only guides can manage availability" });
+        }
+
+        const { startDate, endDate, reason } = req.body;
+        const parsedRange = parseBookingRange({ startDate, endDate });
+
+        if (parsedRange.error) {
+            return res.status(400).json({ error: parsedRange.error });
+        }
+
+        const guideId = req.user.role === 'admin' && req.body.guideId ? req.body.guideId : req.user._id;
+
+        const bookingConflict = await Booking.findOne({
+            guide: guideId,
+            status: { $in: BOOKING_BLOCKING_STATUSES },
+            $or: [
+                { startDate: { $lte: parsedRange.endDate }, endDate: { $gte: parsedRange.startDate } },
+                { startDate: { $exists: false }, tourDate: { $gte: parsedRange.startDate, $lte: parsedRange.endDate } }
+            ]
+        }).select('_id');
+
+        if (bookingConflict) {
+            return res.status(409).json({
+                error: "You already have a booking request on those dates. Cancel it before blocking the dates."
+            });
+        }
+
+        const existingBlockedRange = await GuideAvailability.findOne({
+            guide: guideId,
+            startDate: { $lte: parsedRange.endDate },
+            endDate: { $gte: parsedRange.startDate }
+        }).select('_id');
+
+        if (existingBlockedRange) {
+            return res.status(409).json({ error: "Those dates are already blocked on your calendar." });
+        }
+
+        const blockedRange = new GuideAvailability({
+            guide: guideId,
+            startDate: parsedRange.startDate,
+            endDate: parsedRange.endDate,
+            reason
+        });
+
+        await blockedRange.save();
+
+        res.status(201).json({
+            success: true,
+            message: "Availability updated successfully",
+            blockedRange
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+// UNBLOCK GUIDE DATES
+exports.deleteGuideAvailability = async (req, res) => {
+    try {
+        if (!['guide', 'admin'].includes(req.user.role)) {
+            return res.status(403).json({ error: "Only guides can manage availability" });
+        }
+
+        const { availabilityId } = req.params;
+        const blockedRange = await GuideAvailability.findById(availabilityId);
+
+        if (!blockedRange) {
+            return res.status(404).json({ error: "Blocked date range not found" });
+        }
+
+        if (blockedRange.guide.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ error: "You can only remove your own blocked dates" });
+        }
+
+        await blockedRange.deleteOne();
+
+        res.json({
+            success: true,
+            message: "Blocked dates removed successfully"
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: "Server error" });

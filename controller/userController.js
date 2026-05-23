@@ -6,6 +6,69 @@ const bcrypt = require("bcrypt");
 // Temporary storage for unverified users (in production, use Redis)
 const tempUsers = new Map();
 
+const parseJSON = (value) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
+const normalizeLanguages = (value) => {
+  const parsed = parseJSON(value);
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof parsed === "string") {
+    return parsed.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const normalizeLocation = (value) => {
+  const parsed = parseJSON(value);
+  if (parsed && typeof parsed === "object") {
+    return {
+      city: parsed.city || "",
+      state: parsed.state || "",
+      coordinates: parsed.coordinates,
+    };
+  }
+  if (typeof parsed === "string") {
+    const [city, state] = parsed.split(",").map((part) => part.trim());
+    return { city: city || "", state: state || "" };
+  }
+  return undefined;
+};
+
+const buildSuspensionEmail = ({ name, reason }) => ({
+  subject: "Your GullyGuide account has been suspended",
+  message: `Hello ${name || "GullyGuide user"},
+
+Your GullyGuide account has been suspended by the admin team.
+
+Reason:
+${reason || "Violation of platform rules"}
+
+While suspended, you cannot log in or use protected features such as posts, bookings, comments, or profile updates.
+
+If you believe this was a mistake, please contact support.
+
+GullyGuide Team`,
+});
+
+const buildRestoreEmail = ({ name }) => ({
+  subject: "Your GullyGuide account has been restored",
+  message: `Hello ${name || "GullyGuide user"},
+
+Your GullyGuide account has been restored by the admin team.
+
+You can now log in and use GullyGuide again.
+
+GullyGuide Team`,
+});
+
 /* ======================================================
    REGISTER USER + SEND OTP
 ====================================================== */
@@ -250,6 +313,13 @@ exports.loginUser = async (req, res) => {
           message: "Failed to send verification email",
         });
       }
+    }
+
+    if (user.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is suspended. Please contact support.",
+      });
     }
 
     // Check password
@@ -570,17 +640,22 @@ exports.getUserDetails = async (req, res) => {
 ====================================================== */
 exports.updateProfile = async (req, res) => {
   try {
+    const location = normalizeLocation(req.body.location);
+    const languages = req.body.languages !== undefined
+      ? normalizeLanguages(req.body.languages)
+      : undefined;
+
     const updates = {
       name: req.body.name,
       phone: req.body.phone,
-      avatar: req.body.avatar,
-      languages: req.body.languages,
-      location: req.body.location,
+      avatar: req.file?.path || req.body.avatar,
+      languages,
+      location,
     };
 
     // Remove undefined fields
     Object.keys(updates).forEach(key => {
-      if (updates[key] === undefined) {
+      if (updates[key] === undefined || updates[key] === "") {
         delete updates[key];
       }
     });
@@ -635,6 +710,123 @@ exports.getAllGuides = async (req, res) => {
       success: true,
       count: guides.length,
       guides,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+/* ======================================================
+   ADMIN USERS + BLOCK/SUSPEND
+====================================================== */
+exports.getAdminUsers = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can view users",
+      });
+    }
+
+    const users = await User.find({})
+      .select("-password -otp -otpExpire -resetPasswordToken -resetPasswordExpire -tokenVersion")
+      .sort("-createdAt");
+
+    res.status(200).json({
+      success: true,
+      count: users.length,
+      users,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+exports.updateUserBlockStatus = async (req, res) => {
+  try {
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Only admins can update users",
+      });
+    }
+
+    const { userId } = req.params;
+    const { isBlocked, reason } = req.body;
+
+    if (req.user._id.toString() === userId) {
+      return res.status(400).json({
+        success: false,
+        message: "You cannot suspend your own admin account",
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const nextBlocked = Boolean(isBlocked);
+    const blockReason = reason?.trim() || "Blocked by admin";
+
+    user.isBlocked = nextBlocked;
+    user.blockedReason = user.isBlocked ? blockReason : "";
+    user.blockedAt = user.isBlocked ? new Date() : undefined;
+    if (user.isBlocked) {
+      user.tokenVersion += 1;
+    }
+
+    await user.save({ validateBeforeSave: false });
+
+    let emailSent = false;
+    let emailWarning = "";
+
+    try {
+      const emailContent = user.isBlocked
+        ? buildSuspensionEmail({ name: user.name, reason: blockReason })
+        : buildRestoreEmail({ name: user.name });
+
+      await sendEmail({
+        email: user.email,
+        subject: emailContent.subject,
+        message: emailContent.message,
+      });
+
+      emailSent = true;
+    } catch (emailError) {
+      console.error("Account status email failed:", emailError);
+      emailWarning = "User updated, but email notification could not be sent.";
+    }
+
+    const statusMessage = user.isBlocked
+      ? "User suspended successfully"
+      : "User restored successfully";
+
+    res.status(200).json({
+      success: true,
+      message: emailWarning || `${statusMessage}. Email notification sent.`,
+      emailSent,
+      emailWarning,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isBlocked: user.isBlocked,
+        blockedReason: user.blockedReason,
+        blockedAt: user.blockedAt,
+      },
     });
   } catch (error) {
     res.status(500).json({

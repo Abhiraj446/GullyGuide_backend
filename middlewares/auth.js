@@ -52,6 +52,13 @@ exports.isAuthenticated = async (req, res, next) => {
       });
     }
 
+    if (user.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is suspended. Please contact support."
+      });
+    }
+
     req.user = user;
     next();
   } catch (error) {

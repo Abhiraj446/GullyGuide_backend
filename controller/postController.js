@@ -12,17 +12,55 @@ const parseJSON = (value) => {
   }
 };
 
+const normalizeLocation = (body = {}, fallbackLocation = {}) => {
+  const rawLocation = parseJSON(body.location);
+
+  if (rawLocation && typeof rawLocation === 'object') {
+    return rawLocation;
+  }
+
+  const nestedLocation = body.location && typeof body.location === 'object' ? body.location : {};
+  const bracketLocation = {
+    city: body['location[city]'],
+    state: body['location[state]'],
+    coordinates: {
+      lat: body['location[coordinates][lat]'],
+      lng: body['location[coordinates][lng]'],
+    },
+  };
+
+  const stringLocation = typeof rawLocation === 'string'
+    ? rawLocation.split(',').map((part) => part.trim()).filter(Boolean)
+    : [];
+
+  const candidate = {
+    city: nestedLocation.city || bracketLocation.city || stringLocation[0] || fallbackLocation.city,
+    state: nestedLocation.state || bracketLocation.state || stringLocation[1] || fallbackLocation.state,
+    coordinates: nestedLocation.coordinates || bracketLocation.coordinates || fallbackLocation.coordinates,
+  };
+
+  if (candidate.coordinates) {
+    const lat = Number(candidate.coordinates.lat);
+    const lng = Number(candidate.coordinates.lng);
+    candidate.coordinates = {
+      lat: Number.isFinite(lat) ? lat : undefined,
+      lng: Number.isFinite(lng) ? lng : undefined,
+    };
+  }
+
+  return candidate;
+};
+
 // CREATE POST WITH IMAGE UPLOAD
 exports.createPost = async (req, res) => {
 
     try {
-        // Only guides/admins can create posts
-        if (!['guide', 'admin'].includes(req.user?.role)) {
+        // Only guides can create posts
+        if (req.user?.role !== 'guide') {
             return res.status(403).json({ error: "Only guides can create posts" });
         }
 
-        const { title, body, price, location: rawLocation } = req.body;
-        const requestLocation = parseJSON(rawLocation);
+        const { title, body, price } = req.body;
         const normalizedPrice = Number(price);
 
         // Check required fields
@@ -40,9 +78,10 @@ exports.createPost = async (req, res) => {
         }
 
         const userLocation = req.user?.location || {};
+        const requestLocation = normalizeLocation(req.body, userLocation);
         const locationSource = (requestLocation && requestLocation.city && requestLocation.state)
             ? requestLocation
-            : (userLocation.city && userLocation.state ? userLocation : null);
+            : null;
 
         if (!locationSource || !locationSource.city || !locationSource.state) {
             return res.status(422).json({ error: "Location city and state are required" });
@@ -81,62 +120,6 @@ exports.createPost = async (req, res) => {
 
 
 // GET MY POSTS
-///////////////////////////////////////
-// exports.getAllPosts = async (req, res) => {
-//   try {
-//     // ✅ GET SEARCH PARAMETERS from URL
-//     const { city, state } = req.query;
-
-//     const page = parseInt(req.query.page) || 1;
-//         const limit = parseInt(req.query.limit) || 10;
-//         const skip = (page - 1) * limit;
-
-//     // ✅ BUILD FILTER OBJECT
-//     let filter = {};
-    
-//     if (city) {
-//       filter['location.city'] = { $regex: new RegExp(`^${city}$`, 'i') };
-//     }
-    
-//     if (state) {
-//       filter['location.state'] = { $regex: new RegExp(`^${state}$`, 'i') };
-//     }
-
-//     // ✅ APPLY FILTER to database query
-//     const posts = await Post.find(filter)
-//       .populate('postedBy', 'name email avatar')
-//       .sort({ createdAt: -1 });
-
-//     // Format posts (your existing code)
-//     const formattedPosts = posts.map(post => ({
-//       _id: post._id,
-//       title: post.title,
-//       body: post.body,
-//       price: post.price,
-//       photo: post.photo,
-//       likes: post.likes,
-//       comments: post.comments,
-//       createdAt: post.createdAt,
-//       postedBy: post.postedBy,
-//       location: {
-//         city: post.location?.city?.trim().toUpperCase(),
-//         state: post.location?.state?.trim().toUpperCase(),
-//         coordinates: post.location?.coordinates
-//       }
-//     }));
-
-//     res.json({
-//       success: true,
-//       count: formattedPosts.length,
-//       filters: { city: city || null, state: state || null }, // ✅ SHOW applied filters
-//       posts: formattedPosts
-//     });
-
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ error: "Server error" });
-//   }
-// };
 exports.getAllPosts = async (req, res) => {
   try {
     // Get query params
@@ -517,8 +500,8 @@ exports.deletePost = async (req, res) => {
             return res.status(404).json({ error: "Post not found" });
         }
 
-        // Check ownership
-        if (post.postedBy.toString() !== req.user._id.toString()) {
+        // Check ownership; admins may moderate unsafe posts.
+        if (post.postedBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
             return res.status(403).json({ error: "You can only delete your own posts" });
         }
 
@@ -582,8 +565,8 @@ exports.updatePost = async (req, res) => {
             updates.price = normalizedPrice;
         }
 
-        const requestLocation = parseJSON(req.body.location);
-        if (requestLocation && typeof requestLocation === 'object') {
+        const requestLocation = normalizeLocation(req.body, post.location || req.user?.location || {});
+        if (requestLocation && requestLocation.city && requestLocation.state) {
             updates.location = requestLocation;
         }
         

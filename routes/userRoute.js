@@ -10,10 +10,12 @@ const {
   getUserDetails,
   updateProfile,
   getAllGuides,
+  getAdminUsers,
+  updateUserBlockStatus,
   resendOtp,
 } = require("../controller/userController");
 
-const { isAuthenticated } = require("../middlewares/auth");
+const { isAuthenticated, authorizeRoles } = require("../middlewares/auth");
 const { uploadAvatar } = require("../middlewares/upload");
 
 
@@ -34,6 +36,10 @@ router.put("/password/update", isAuthenticated, updatePassword);
 
 /* ============ GUIDE SEARCH ================= */
 router.get("/guides", getAllGuides);
+
+/* ============ ADMIN ================= */
+router.get("/admin/users", isAuthenticated, authorizeRoles("admin"), getAdminUsers);
+router.put("/admin/users/:userId/block", isAuthenticated, authorizeRoles("admin"), updateUserBlockStatus);
 
 /* ============ USER PROFILE ============== */
 router.get("/me", isAuthenticated, getUserDetails);

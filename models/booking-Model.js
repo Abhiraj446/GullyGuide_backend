@@ -39,6 +39,20 @@ const bookingSchema = new mongoose.Schema({
         min: 1,
         max: 20
     },
+    selectedPackage: {
+        name: {
+            type: String,
+            required: true,
+            enum: ['Standard', 'Medium', 'Premium'],
+            default: 'Standard'
+        },
+        multiplier: {
+            type: Number,
+            required: true,
+            min: 0,
+            default: 1
+        }
+    },
     totalPrice: {
         type: Number,
         required: true
@@ -48,9 +62,28 @@ const bookingSchema = new mongoose.Schema({
         enum: ['pending', 'confirmed', 'cancelled', 'completed'],
         default: 'pending'
     },
+    statusOtp: {
+        code: {
+            type: String,
+            select: false
+        },
+        action: {
+            type: String,
+            enum: ['confirmed'],
+            select: false
+        },
+        expiresAt: {
+            type: Date,
+            select: false
+        }
+    },
     specialRequests: {
         type: String,
         maxlength: 500
+    },
+    cancellationReason: {
+        type: String,
+        maxlength: 300
     },
     createdAt: {
         type: Date,

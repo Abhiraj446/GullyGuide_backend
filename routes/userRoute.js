@@ -3,6 +3,7 @@ const {
   registerUser,
   verifyOtp,
   loginUser,
+  firebaseAuth,
   logoutUser,
   forgotPassword,
   resetPassword,
@@ -27,6 +28,7 @@ const router = express.Router();
 router.post("/verify-otp", verifyOtp);
 router.post("/resend-otp", resendOtp);
 router.post("/login", loginUser);
+router.post("/firebase-auth", firebaseAuth);
 router.get("/logout", isAuthenticated, logoutUser);
 
 /* ============ PASSWORD ================== */

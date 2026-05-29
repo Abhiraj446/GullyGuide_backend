@@ -4,6 +4,7 @@ const {
     getMyBookings,
     getGuideBookings,
     getAdminBookingStats,
+    requestBookingStatusOtp,
     updateBookingStatus,
     cancelBooking,
     getBookingDetails,
@@ -27,6 +28,7 @@ router.delete('/availability/:availabilityId', isAuthenticated, authorizeRoles('
 
 // Guide routes
 router.get('/guide-bookings', isAuthenticated, authorizeRoles('guide', 'admin'), getGuideBookings);
+router.post('/status/:bookingId/otp', isAuthenticated, authorizeRoles('guide', 'admin'), requestBookingStatusOtp);
 router.put('/status/:bookingId', isAuthenticated, authorizeRoles('guide', 'admin'), updateBookingStatus);
 
 // Admin routes

@@ -2,6 +2,7 @@ const User = require("../models/userModel");
 const crypto = require("crypto"); 
 const sendEmail = require("../utils/sendEmail");
 const bcrypt = require("bcrypt"); 
+const firebaseAdmin = require("../config/firebase");
 
 // Temporary storage for unverified users (in production, use Redis)
 const tempUsers = new Map();
@@ -348,6 +349,98 @@ exports.loginUser = async (req, res) => {
       success: false, 
       message: "Server error", 
       error: error.message 
+    });
+  }
+};
+
+/* ======================================================
+   FIREBASE REGISTER / LOGIN
+====================================================== */
+exports.firebaseAuth = async (req, res) => {
+  try {
+    const { idToken, role = "tourist", phone } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Firebase ID token is required",
+      });
+    }
+
+    const decodedToken = await firebaseAdmin.auth().verifyIdToken(idToken);
+    const email = decodedToken.email;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Firebase account must have an email address",
+      });
+    }
+
+    const normalizedRole = ["tourist", "guide", "admin"].includes(role)
+      ? role
+      : "tourist";
+
+    if ((normalizedRole === "guide" || normalizedRole === "admin") && !phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required for guides",
+      });
+    }
+
+    let user = await User.findOne({
+      $or: [{ firebaseUid: decodedToken.uid }, { email }],
+    });
+
+    if (user) {
+      if (user.isBlocked) {
+        return res.status(403).json({
+          success: false,
+          message: "Your account is suspended. Please contact support.",
+        });
+      }
+
+      user.firebaseUid = user.firebaseUid || decodedToken.uid;
+      user.authProvider = "firebase";
+      user.isVerified = true;
+      user.avatar = decodedToken.picture || user.avatar;
+      if (phone && !user.phone) user.phone = phone;
+      await user.save({ validateBeforeSave: false });
+    } else {
+      user = await User.create({
+        name: decodedToken.name || email.split("@")[0],
+        email,
+        phone: phone || undefined,
+        role: normalizedRole,
+        avatar: decodedToken.picture || "default-avatar-url",
+        firebaseUid: decodedToken.uid,
+        authProvider: "firebase",
+        isVerified: true,
+      });
+    }
+
+    const token = user.getJWTToken();
+
+    res.status(200).json({
+      success: true,
+      message: "Firebase authentication successful",
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        avatar: user.avatar,
+        isVerified: user.isVerified,
+        authProvider: user.authProvider,
+      },
+    });
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      message: "Firebase authentication failed",
+      error: error.message,
     });
   }
 };

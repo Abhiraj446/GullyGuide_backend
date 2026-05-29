@@ -51,6 +51,12 @@ const normalizeLocation = (body = {}, fallbackLocation = {}) => {
   return candidate;
 };
 
+const defaultPackages = [
+  { name: 'Standard', multiplier: 1.0 },
+  { name: 'Medium', multiplier: 1.5 },
+  { name: 'Premium', multiplier: 3.0 },
+];
+
 // CREATE POST WITH IMAGE UPLOAD
 exports.createPost = async (req, res) => {
 
@@ -219,6 +225,30 @@ exports.getPost = async (req, res) => {
         }
 
         res.json({ post });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server error" });
+    }
+};
+
+exports.getPostPackages = async (req, res) => {
+    try {
+        const post = await Post.findById(req.params.postId).select('title price packages');
+
+        if (!post) {
+            return res.status(404).json({ error: "Post not found" });
+        }
+
+        const packages = Array.isArray(post.packages) && post.packages.length
+            ? post.packages
+            : defaultPackages;
+
+        res.json({
+            success: true,
+            postId: post._id,
+            basePrice: post.price,
+            packages
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: "Server error" });

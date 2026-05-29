@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 const ObjectId = Schema.Types.ObjectId;
+
+const defaultPackages = [
+    { name: 'Standard', multiplier: 1.0 },
+    { name: 'Medium', multiplier: 1.5 },
+    { name: 'Premium', multiplier: 3.0 },
+];
+
 const postSchema = new Schema({
     title : {
         type : String,
@@ -25,6 +32,21 @@ const postSchema = new Schema({
         type : Number,
         required : true,
         min : 0
+    },
+    packages: {
+        type: [{
+            name: {
+                type: String,
+                required: true,
+                enum: ['Standard', 'Medium', 'Premium']
+            },
+            multiplier: {
+                type: Number,
+                required: true,
+                min: 0
+            }
+        }],
+        default: defaultPackages
     },
 
     postedBy : {

@@ -2,9 +2,16 @@ const Booking = require('../models/booking-Model');
 const Post = require('../models/post');
 const User = require('../models/userModel');
 const GuideAvailability = require('../models/guideAvailability-Model');
+const sendEmail = require('../utils/sendEmail');
 const { sendNotification, NotificationTemplates } = require('../utils/notificationHelper');
 
 const BOOKING_BLOCKING_STATUSES = ['pending', 'confirmed'];
+const DEFAULT_PACKAGES = [
+    { name: 'Standard', multiplier: 1.0 },
+    { name: 'Medium', multiplier: 1.5 },
+    { name: 'Premium', multiplier: 3.0 },
+];
+const generateFourDigitOtp = () => Math.floor(1000 + Math.random() * 9000).toString();
 
 const startOfDay = (value) => {
     const date = new Date(value);
@@ -97,7 +104,7 @@ exports.createBooking = async (req, res) => {
             return res.status(403).json({ error: "Only tourists can create bookings" });
         }
 
-        const { postId, tourDate, startDate, endDate, numberOfPeople, specialRequests } = req.body;
+        const { postId, tourDate, startDate, endDate, numberOfPeople, specialRequests, selectedPackage } = req.body;
 
         if (!postId || !(tourDate || startDate) || numberOfPeople === undefined || numberOfPeople === null) {
             return res.status(400).json({
@@ -130,6 +137,28 @@ exports.createBooking = async (req, res) => {
             });
         }
 
+        const requestedPackageName = typeof selectedPackage === 'string'
+            ? selectedPackage
+            : selectedPackage?.name;
+        const packageName = requestedPackageName || 'Standard';
+        const availablePackages = Array.isArray(post.packages) && post.packages.length
+            ? post.packages
+            : DEFAULT_PACKAGES;
+        const packageOption = availablePackages.find((pkg) => pkg.name === packageName);
+
+        if (!packageOption) {
+            return res.status(400).json({
+                error: "Invalid package selected"
+            });
+        }
+
+        const packageMultiplier = Number(packageOption.multiplier);
+        if (!Number.isFinite(packageMultiplier) || packageMultiplier < 0) {
+            return res.status(400).json({
+                error: "Selected package has an invalid price multiplier"
+            });
+        }
+
         // Get guide from post
         const guideId = post.postedBy;
         if (!guideId) {
@@ -143,8 +172,8 @@ exports.createBooking = async (req, res) => {
             return res.status(409).json({ error: conflict.message });
         }
 
-        // Calculate total price (price per person * people count * booked days)
-        const totalPrice = normalizedPrice * normalizedPeople * parsedRange.durationDays;
+        // Calculate total price (base price * package multiplier * people count * booked days)
+        const totalPrice = normalizedPrice * packageMultiplier * normalizedPeople * parsedRange.durationDays;
         if (!Number.isFinite(totalPrice)) {
             return res.status(400).json({
                 error: "Unable to calculate booking price for this trip"
@@ -161,6 +190,10 @@ exports.createBooking = async (req, res) => {
             endDate: parsedRange.endDate,
             durationDays: parsedRange.durationDays,
             numberOfPeople: normalizedPeople,
+            selectedPackage: {
+                name: packageOption.name,
+                multiplier: packageMultiplier
+            },
             totalPrice,
             specialRequests,
             status: 'pending'
@@ -187,7 +220,7 @@ exports.createBooking = async (req, res) => {
         const populatedBooking = await Booking.findById(booking._id)
             .populate('tourist', 'name email avatar')
             .populate('guide', 'name email avatar phone')
-            .populate('post', 'title price location');
+            .populate('post', 'title price location packages');
 
         res.status(201).json({
             success: true,
@@ -279,9 +312,74 @@ exports.getAdminBookingStats = async (req, res) => {
 };
 
 // UPDATE BOOKING STATUS (Guide only)
+exports.requestBookingStatusOtp = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+        const { status } = req.body;
+
+        if (status !== 'confirmed') {
+            return res.status(400).json({ error: "OTP is only required for confirming bookings" });
+        }
+
+        const booking = await Booking.findById(bookingId)
+            .populate('tourist', 'name email')
+            .populate('guide', 'name email')
+            .populate('post', 'title');
+
+        if (!booking) {
+            return res.status(404).json({ error: "Booking not found" });
+        }
+
+        if (booking.guide._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ error: "Only the guide can request confirmation OTP" });
+        }
+
+        if (booking.status !== 'pending') {
+            return res.status(400).json({ error: "Only pending bookings can be confirmed with OTP" });
+        }
+
+        if (!booking.tourist?.email) {
+            return res.status(400).json({ error: "Tourist email is not available for OTP verification" });
+        }
+
+        const conflict = await findGuideDateConflict(
+            booking.guide._id,
+            booking.startDate || booking.tourDate,
+            booking.endDate || booking.tourDate,
+            booking._id
+        );
+
+        if (conflict) {
+            return res.status(409).json({ error: conflict.message });
+        }
+
+        const otp = generateFourDigitOtp();
+        booking.statusOtp = {
+            code: otp,
+            action: 'confirmed',
+            expiresAt: new Date(Date.now() + 10 * 60 * 1000)
+        };
+        await booking.save();
+
+        await sendEmail({
+            email: booking.tourist.email,
+            subject: "GullyGuide booking confirmation OTP",
+            message: `Your 4-digit OTP to approve "${booking.post?.title || 'your tour'}" is ${otp}. Share it with your guide only if you approve this booking confirmation. This OTP is valid for 10 minutes.`
+        });
+
+        res.json({
+            success: true,
+            message: `4-digit OTP sent to tourist email ${booking.tourist.email}`
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Unable to send booking confirmation OTP" });
+    }
+};
+
 exports.updateBookingStatus = async (req, res) => {
     try {
-        const { status } = req.body;
+        const { status, otp, cancellationReason } = req.body;
         const { bookingId } = req.params;
 
         const validStatuses = ['confirmed', 'cancelled', 'completed'];
@@ -289,7 +387,7 @@ exports.updateBookingStatus = async (req, res) => {
             return res.status(400).json({ error: "Invalid status" });
         }
 
-        const booking = await Booking.findById(bookingId);
+        const booking = await Booking.findById(bookingId).select('+statusOtp.code +statusOtp.action +statusOtp.expiresAt');
         if (!booking) {
             return res.status(404).json({ error: "Booking not found" });
         }
@@ -305,6 +403,23 @@ exports.updateBookingStatus = async (req, res) => {
         }
 
         if (status === 'confirmed') {
+            const normalizedOtp = String(otp || '').trim();
+            if (!/^\d{4}$/.test(normalizedOtp)) {
+                return res.status(400).json({ error: "Enter the 4-digit OTP sent to the tourist email" });
+            }
+
+            if (
+                !booking.statusOtp?.code ||
+                booking.statusOtp.action !== 'confirmed' ||
+                booking.statusOtp.expiresAt < new Date()
+            ) {
+                return res.status(400).json({ error: "Confirmation OTP is missing or expired. Send a new OTP." });
+            }
+
+            if (booking.statusOtp.code !== normalizedOtp) {
+                return res.status(400).json({ error: "Invalid OTP. Please enter the exact 4-digit code." });
+            }
+
             const conflict = await findGuideDateConflict(
                 booking.guide,
                 booking.startDate || booking.tourDate,
@@ -315,6 +430,19 @@ exports.updateBookingStatus = async (req, res) => {
             if (conflict) {
                 return res.status(409).json({ error: conflict.message });
             }
+
+            booking.statusOtp = undefined;
+        }
+
+        if (status === 'cancelled' && ['guide', 'admin'].includes(req.user.role)) {
+            const normalizedReason = String(cancellationReason || '').trim();
+            if (!normalizedReason) {
+                return res.status(400).json({ error: "Cancellation reason is required" });
+            }
+            if (normalizedReason.length > 300) {
+                return res.status(400).json({ error: "Cancellation reason must be 300 characters or less" });
+            }
+            booking.cancellationReason = normalizedReason;
         }
 
         booking.status = status;
@@ -340,6 +468,64 @@ exports.updateBookingStatus = async (req, res) => {
                 booking._id,
                 'Booking'
             );
+
+            if (updatedBooking?.tourist?.email) {
+                await sendEmail({
+                    email: updatedBooking.tourist.email,
+                    subject: "Your GullyGuide trip is confirmed",
+                    message: `Hi ${updatedBooking.tourist.name || 'traveler'},\n\nYour booking for "${updatedBooking?.post?.title || 'your tour'}" has been confirmed by ${updatedBooking?.guide?.name || 'your guide'}.\n\nThank you for using GullyGuide.`
+                });
+            }
+        }
+
+        if (status === 'cancelled') {
+            const bookingCancelledNotification = NotificationTemplates.bookingCancelled(
+                req.user.name,
+                updatedBooking?.post?.title || 'your tour'
+            );
+
+            await sendNotification(
+                booking.tourist,
+                req.user._id,
+                'booking_cancelled',
+                bookingCancelledNotification.title,
+                bookingCancelledNotification.message,
+                booking._id,
+                'Booking'
+            );
+
+            if (updatedBooking?.tourist?.email) {
+                await sendEmail({
+                    email: updatedBooking.tourist.email,
+                    subject: "Your GullyGuide trip was cancelled",
+                    message: `Hi ${updatedBooking.tourist.name || 'traveler'},\n\nYour booking for "${updatedBooking?.post?.title || 'your tour'}" was cancelled by ${updatedBooking?.guide?.name || 'your guide'}.\n\nReason: ${booking.cancellationReason || 'Not specified'}\n\nYou can book another tour from your dashboard.`
+                });
+            }
+        }
+
+        if (status === 'completed') {
+            const bookingCompletedNotification = NotificationTemplates.bookingCompleted(
+                req.user.name,
+                updatedBooking?.post?.title || 'your tour'
+            );
+
+            await sendNotification(
+                booking.tourist,
+                req.user._id,
+                'booking_completed',
+                bookingCompletedNotification.title,
+                bookingCompletedNotification.message,
+                booking._id,
+                'Booking'
+            );
+
+            if (updatedBooking?.tourist?.email) {
+                await sendEmail({
+                    email: updatedBooking.tourist.email,
+                    subject: "Your GullyGuide trip is completed",
+                    message: `Hi ${updatedBooking.tourist.name || 'traveler'},\n\nYour trip "${updatedBooking?.post?.title || 'your tour'}" has been marked completed by ${updatedBooking?.guide?.name || 'your guide'}.\n\nYou can now review your experience from your bookings page.`
+                });
+            }
         }
 
         res.json({

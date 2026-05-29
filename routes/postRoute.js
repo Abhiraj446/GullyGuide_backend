@@ -13,6 +13,7 @@ const {
     unlikeComment,
     deletePost,
     updatePost,
+    getPostPackages,
 } = require('../controller/postController'); // Fixed: 'controller' -> 'controllers'
 const { isAuthenticated, authorizeRoles } = require('../middlewares/auth'); // Fixed: 'middlewares' (plural)
 const {upload} = require('../middlewares/upload')
@@ -26,6 +27,7 @@ router.post('/create', isAuthenticated, authorizeRoles('guide'), upload.single('
 
 router.get('/all', getAllPosts);
 router.get('/me', isAuthenticated, authorizeRoles('guide'), getMyPosts);
+router.get('/:postId/packages', getPostPackages);
 router.get('/:postId', isAuthenticated, getPost);
 router.put('/like/:postId', isAuthenticated, likePost);
 router.put('/unlike/:postId', isAuthenticated, unlikePost);

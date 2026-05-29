@@ -21,9 +21,23 @@ const userSchema = new mongoose.Schema({
 
   password: {
     type: String,
-    required: [true, "Please enter a password"],
+    required: [function() {
+      return this.authProvider !== "firebase";
+    }, "Please enter a password"],
     minlength: [8, "Password must be at least 8 characters"],
     select: false,
+  },
+
+  firebaseUid: {
+    type: String,
+    unique: true,
+    sparse: true,
+  },
+
+  authProvider: {
+    type: String,
+    enum: ["local", "firebase"],
+    default: "local",
   },
 
   phone: {
@@ -116,7 +130,7 @@ const userSchema = new mongoose.Schema({
 
 userSchema.pre("save", async function() {
   // Only hash the password if it has been modified (or is new)
-  if (!this.isModified("password")) {
+  if (!this.isModified("password") || !this.password) {
     return;
   }
   

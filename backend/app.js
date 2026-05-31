@@ -31,6 +31,11 @@ app.use('/api/notifications', notificationRoutes);
 
 app.use('/api/itinerary', itineraryRoutes);
 
+// Root health check route
+app.get('/', (req, res) => {
+	res.status(200).send('Backend Working Successfully');
+});
+
 
 
 module.exports = app;

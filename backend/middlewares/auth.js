@@ -83,6 +83,8 @@ exports.isAuthenticated = async (req, res, next) => {
   }
 };
 
+exports.isAuthenticatedUser = exports.isAuthenticated;
+
 exports.authorizeRoles = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {

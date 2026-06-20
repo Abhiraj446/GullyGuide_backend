@@ -57,6 +57,29 @@ const defaultPackages = [
   { name: 'Premium', multiplier: 3.0 },
 ];
 
+const normalizeGroupDiscounts = (value) => {
+  const parsed = parseJSON(value);
+  if (parsed === undefined || parsed === null || parsed === '') return undefined;
+  if (!Array.isArray(parsed)) {
+    throw new Error('groupDiscounts must be an array');
+  }
+
+  return parsed.map((item) => {
+    const minPeople = Number(item.minPeople);
+    const discountPercent = Number(item.discountPercent);
+
+    if (!Number.isInteger(minPeople) || minPeople < 1) {
+      throw new Error('groupDiscounts minPeople must be a positive integer');
+    }
+
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+      throw new Error('groupDiscounts discountPercent must be between 0 and 100');
+    }
+
+    return { minPeople, discountPercent };
+  }).sort((a, b) => a.minPeople - b.minPeople);
+};
+
 // CREATE POST WITH IMAGE UPLOAD
 exports.createPost = async (req, res) => {
 
@@ -93,7 +116,14 @@ exports.createPost = async (req, res) => {
             return res.status(422).json({ error: "Location city and state are required" });
         }
 
-        const post = new Post({
+        let groupDiscounts;
+        try {
+            groupDiscounts = normalizeGroupDiscounts(req.body.groupDiscounts);
+        } catch (error) {
+            return res.status(422).json({ error: error.message });
+        }
+
+        const postData = {
             title,
             body,
             price: normalizedPrice,
@@ -104,9 +134,11 @@ exports.createPost = async (req, res) => {
                 state: locationSource.state,
                 coordinates: locationSource.coordinates || userLocation.coordinates
             }
-            
+        };
 
-        });
+        if (groupDiscounts !== undefined) postData.groupDiscounts = groupDiscounts;
+
+        const post = new Post(postData);
 
         await post.save();
         
@@ -593,6 +625,13 @@ exports.updatePost = async (req, res) => {
                 return res.status(422).json({ error: "Valid price is required" });
             }
             updates.price = normalizedPrice;
+        }
+        if (req.body.groupDiscounts !== undefined) {
+            try {
+                updates.groupDiscounts = normalizeGroupDiscounts(req.body.groupDiscounts);
+            } catch (error) {
+                return res.status(422).json({ error: error.message });
+            }
         }
 
         const requestLocation = normalizeLocation(req.body, post.location || req.user?.location || {});

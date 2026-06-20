@@ -16,6 +16,15 @@
     },
   });
 
+  const assetStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: 'GullyGuide/assets',
+      allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+      transformation: [{ width: 1000, height: 1000, crop: 'limit' }],
+    },
+  });
+
   // Storage for user avatars
   const avatarStorage = new CloudinaryStorage({
     cloudinary: cloudinary,
@@ -59,4 +68,22 @@
     }
   });
 
-  module.exports = {upload, uploadAvatar};
+  const uploadAsset = multer({
+    storage: assetStorage,
+    limits: {
+      fileSize: 5 * 1024 * 1024, // 5MB
+    },
+    fileFilter: (req, file, cb) => {
+      console.log('ðŸ“ Asset file received:', file.originalname, 'Type:', file.mimetype);
+      if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only image files are allowed!'), false);
+      }
+    }
+  });
+
+  const uploadMultiple = (fieldName, maxCount = 5) => uploadAsset.array(fieldName, maxCount);
+  const uploadSingle = (fieldName) => uploadAsset.single(fieldName);
+
+  module.exports = { upload, uploadAvatar, uploadMultiple, uploadSingle };

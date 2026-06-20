@@ -8,6 +8,12 @@ const defaultPackages = [
     { name: 'Premium', multiplier: 3.0 },
 ];
 
+const defaultGroupDiscounts = [
+    { minPeople: 5, discountPercent: 10 },
+    { minPeople: 8, discountPercent: 15 },
+    { minPeople: 10, discountPercent: 20 },
+];
+
 const postSchema = new Schema({
     title : {
         type : String,
@@ -47,6 +53,22 @@ const postSchema = new Schema({
             }
         }],
         default: defaultPackages
+    },
+    groupDiscounts: {
+        type: [{
+            minPeople: {
+                type: Number,
+                required: true,
+                min: 1,
+            },
+            discountPercent: {
+                type: Number,
+                required: true,
+                min: 0,
+                max: 100,
+            },
+        }],
+        default: defaultGroupDiscounts,
     },
 
     postedBy : {
